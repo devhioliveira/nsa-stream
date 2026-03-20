@@ -1,5 +1,6 @@
 import os
 import threading
+import subprocess
 from PIL import Image, ImageFont, ImageDraw
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -297,7 +298,7 @@ class LiturgiaApp:
         self.status_label_auto = ttk.Label(self.tab_auto, text="Aguardando...", style="Status.TLabel")
         self.status_label_auto.pack(pady=20)
 
-        # --- ABA MANUAL (CORRIGIDA) ---
+        # --- ABA MANUAL ---
         self.tab_manual = ttk.Frame(self.notebook, padding=0)
         self.notebook.add(self.tab_manual, text="Manual")
 
@@ -319,7 +320,7 @@ class LiturgiaApp:
         # Configura o canvas para usar a scrollbar
         canvas.configure(yscrollcommand=scrollbar.set)
         
-        # Empacota o Canvas e a Scrollbar (ISSO ESTAVA FALTANDO)
+        # Empacota o Canvas e a Scrollbar
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
@@ -362,6 +363,39 @@ class LiturgiaApp:
         self.status_label_auto.config(text=message)
         self.root.update_idletasks()
 
+    def executar_comandos_git(self):
+        """Executa a sequência de comandos git para atualizar o repositório."""
+        try:
+            self.update_status("Atualizando repositório GitHub...")
+            
+            # git add .
+            subprocess.run(["git", "add", "."], check=True)
+            
+            # git commit -m "nsa-stream up"
+            # O comando commit pode falhar se não houver alterações, então capturamos o erro mas não interrompemos
+            try:
+                subprocess.run(["git", "commit", "-m", "nsa-stream up"], check=True)
+            except subprocess.CalledProcessError:
+                # Se não houver nada para commitar, seguimos para o push
+                pass
+            
+            # git push origin main --force
+            subprocess.run(["git", "push", "origin", "main", "--force"], check=True)
+            
+            self.update_status("Repositório atualizado com sucesso!")
+            messagebox.showinfo("GitHub", "Repositório atualizado com sucesso!")
+            
+        except subprocess.CalledProcessError as e:
+            self.update_status("Erro ao atualizar GitHub.")
+            messagebox.showerror("Erro GitHub", f"Ocorreu um erro ao executar os comandos Git:\n{e}")
+        except Exception as e:
+            messagebox.showerror("Erro GitHub", f"Erro inesperado:\n{e}")
+
+    def perguntar_github(self):
+        """Pergunta ao usuário se deseja atualizar o GitHub."""
+        if messagebox.askyesno("GitHub", "Deseja atualizar no repositório github?"):
+            self.executar_comandos_git()
+
     def iniciar_automatico(self):
         """Inicia o processo automático em uma thread separada para não travar a UI."""
         self.btn_gerar_auto.config(state="disabled")
@@ -394,6 +428,9 @@ class LiturgiaApp:
             
             self.update_status(f"Concluído: {titulo_dia}")
             messagebox.showinfo("Sucesso", f"Liturgia de '{titulo_dia}' gerada com sucesso na pasta 'src'!")
+            
+            # Pergunta sobre o GitHub
+            self.perguntar_github()
             
         except Exception as e:
             self.update_status("Ocorreu um erro.")
@@ -430,6 +467,10 @@ class LiturgiaApp:
         try:
             criarImagens(infoLiturgia, status_callback=self.update_status)
             messagebox.showinfo("Sucesso", "Imagens geradas com sucesso na pasta 'src'!")
+            
+            # Pergunta sobre o GitHub
+            self.perguntar_github()
+            
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao gerar imagens:\n{str(e)}")
 
