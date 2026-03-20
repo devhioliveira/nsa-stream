@@ -1,6 +1,7 @@
 import os
 import threading
 import subprocess
+import time
 from PIL import Image, ImageFont, ImageDraw
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -230,6 +231,25 @@ class LiturgiaScraper:
         
         return [dados["primeira"], dados["salmo"], dados["segunda"], dados["evangelho"], resposta_salmo]
 
+    def ir_para_proximo_dia(self):
+        """Navega para o próximo dia clicando no link de 'próximo'."""
+        try:
+            # Encontra o elemento de navegação (seta de próximo)
+            elem = self.browser.find_element('id', 'nextpost')
+            html = elem.get_attribute('outerHTML')
+            soup = BeautifulSoup(html, 'html.parser')
+            link = soup.find('a')
+            
+            if link and link.has_attr('href'):
+                next_url = link['href']
+                self.browser.get(next_url)
+                time.sleep(2) # Espera a página carregar
+                return True
+            return False
+        except Exception as e:
+            print(f"Erro ao navegar: {e}")
+            return False
+
     def fechar(self):
         self.browser.quit()
 
@@ -269,6 +289,9 @@ class LiturgiaApp:
         self.style.map("Accent.TButton", background=[("active", self.btn_hover)])
 
         self.style.configure("TEntry", padding=10, font=(self.font_family, 10), fieldbackground="white")
+        
+        # Estilo para o Combobox
+        self.style.configure("TCombobox", padding=5, font=(self.font_family, 10))
 
         # Container Principal
         self.main_frame = tk.Frame(root, bg=self.bg_color)
@@ -290,7 +313,22 @@ class LiturgiaApp:
         auto_title.pack(pady=(0, 10))
         
         auto_desc = ttk.Label(self.tab_auto, text="O sistema acessará o site da Paulus\nbaixará a liturgia do dia e gerará as imagens.", justify="center")
-        auto_desc.pack(pady=(0, 30))
+        auto_desc.pack(pady=(0, 15))
+
+        # --- Seletor de Data ---
+        selector_frame = ttk.Frame(self.tab_auto)
+        selector_frame.pack(pady=10)
+
+        ttk.Label(selector_frame, text="Selecione o dia:").pack(side="left", padx=(0, 10))
+        
+        self.dia_selecionado = tk.StringVar()
+        self.combo_dias = ttk.Combobox(selector_frame, textvariable=self.dia_selecionado, 
+                                       values=["Hoje", "Amanhã", "Daqui 2 dias", "Daqui 4 dias"], 
+                                       state="readonly", width=20)
+        self.combo_dias.current(0) # Define "Hoje" como padrão
+        self.combo_dias.pack(side="left")
+
+        # ----------------------
 
         self.btn_gerar_auto = ttk.Button(self.tab_auto, text="GERAR LITURGIA DO DIA", style="Accent.TButton", command=self.iniciar_automatico)
         self.btn_gerar_auto.pack(pady=20, ipadx=20)
@@ -315,7 +353,7 @@ class LiturgiaApp:
         )
 
         # Cria a janela dentro do canvas contendo o frame
-        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=600) # Largura fixa para evitar encolhimento
+        canvas.create_window((0, 0), window=scrollable_frame, anchor="nw", width=600)
 
         # Configura o canvas para usar a scrollbar
         canvas.configure(yscrollcommand=scrollbar.set)
@@ -372,11 +410,9 @@ class LiturgiaApp:
             subprocess.run(["git", "add", "."], check=True)
             
             # git commit -m "nsa-stream up"
-            # O comando commit pode falhar se não houver alterações, então capturamos o erro mas não interrompemos
             try:
                 subprocess.run(["git", "commit", "-m", "nsa-stream up"], check=True)
             except subprocess.CalledProcessError:
-                # Se não houver nada para commitar, seguimos para o push
                 pass
             
             # git push origin main --force
@@ -397,7 +433,7 @@ class LiturgiaApp:
             self.executar_comandos_git()
 
     def iniciar_automatico(self):
-        """Inicia o processo automático em uma thread separada para não travar a UI."""
+        """Inicia o processo automático em uma thread separada."""
         self.btn_gerar_auto.config(state="disabled")
         self.status_label_auto.config(text="Iniciando navegador...")
         
@@ -408,9 +444,24 @@ class LiturgiaApp:
         link = "https://www.paulus.com.br/portal/liturgia-diaria/"
         scraper = None
         try:
-            # headless=True para não aparecer a janela do chrome (rodar em segundo plano)
             scraper = LiturgiaScraper(headless=True)
             scraper.acessar_site(link)
+            
+            # Lógica para navegar para o dia selecionado
+            selecao = self.dia_selecionado.get()
+            offset_map = {
+                "Hoje": 0,
+                "Amanhã": 1,
+                "Daqui 2 dias": 2,
+                "Daqui 4 dias": 4
+            }
+            dias_para_avancar = offset_map.get(selecao, 0)
+            
+            if dias_para_avancar > 0:
+                self.update_status(f"Navegando para {selecao.lower()}...")
+                for _ in range(dias_para_avancar):
+                    if not scraper.ir_para_proximo_dia():
+                        raise Exception("Não foi possível navegar para o dia selecionado.")
             
             self.update_status("Coletando dados...")
             titulo_dia = scraper.obter_titulo_dia_semana()
@@ -438,7 +489,6 @@ class LiturgiaApp:
         finally:
             if scraper:
                 scraper.fechar()
-            # Reabilita o botão na thread principal
             self.root.after(0, lambda: self.btn_gerar_auto.config(state="normal"))
 
     def iniciar_manual(self):
@@ -452,14 +502,13 @@ class LiturgiaApp:
                 messagebox.showerror("Erro", f"O campo '{campo}' é obrigatório!")
                 return
 
-        # Monta a lista no formato esperado por criarImagens
         infoLiturgia = [
-            dados.get("titulo") if dados.get("titulo") else dados.get("tempo"), # Nome da pasta
+            dados.get("titulo") if dados.get("titulo") else dados.get("tempo"),
             dados["tempo"],
             dados["cor"],
             dados["primeira"],
             dados["salmo"],
-            dados["segunda"], # Pode ser vazio
+            dados["segunda"],
             dados["evangelho"],
             dados["resposta"]
         ]
@@ -467,10 +516,7 @@ class LiturgiaApp:
         try:
             criarImagens(infoLiturgia, status_callback=self.update_status)
             messagebox.showinfo("Sucesso", "Imagens geradas com sucesso na pasta 'src'!")
-            
-            # Pergunta sobre o GitHub
             self.perguntar_github()
-            
         except Exception as e:
             messagebox.showerror("Erro", f"Erro ao gerar imagens:\n{str(e)}")
 
